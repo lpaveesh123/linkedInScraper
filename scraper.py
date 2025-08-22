@@ -1,43 +1,54 @@
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
+import pandas as pd
+import time
 
-def run_scraper():
+def scrape_keywords(keywords):
+    service = Service("/usr/bin/chromedriver")  # path for Render container
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+
+    driver = webdriver.Chrome(service=service, options=options)
+
+    results = []
+
     try:
-        # ✅ Set Chrome options
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")  # run without UI
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
+        for keyword in keywords:
+            url = f"https://www.linkedin.com/jobs/search/?keywords={keyword}"
+            driver.get(url)
+            time.sleep(3)
 
-        # ✅ Point to where Render installs chromium & chromedriver
-        chrome_options.binary_location = "/usr/bin/chromium"
-        service = Service("/usr/bin/chromedriver")
+            try:
+                job_cards = WebDriverWait(driver, 10).until(
+                    EC.presence_of_all_elements_located((By.CLASS_NAME, "base-card"))
+                )
+                for card in job_cards[:10]:  # scrape first 10 per keyword
+                    try:
+                        title = card.find_element(By.CLASS_NAME, "base-search-card__title").text
+                        company = card.find_element(By.CLASS_NAME, "base-search-card__subtitle").text
+                        location = card.find_element(By.CLASS_NAME, "job-search-card__location").text
+                        results.append({
+                            "Keyword": keyword,
+                            "Job Title": title,
+                            "Company": company,
+                            "Location": location
+                        })
+                    except NoSuchElementException:
+                        continue
+            except TimeoutException:
+                print(f"No jobs found for {keyword}")
 
-        # ✅ Launch driver
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.get("https://www.linkedin.com/")  # Example target
-
-        print("Page title:", driver.title)
-
-        # Example: wait for login button
-        try:
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            print("Page loaded successfully!")
-        except TimeoutException:
-            print("Timeout: Page did not load in time.")
-
+    finally:
         driver.quit()
 
-    except Exception as e:
-        print("Error while scraping:", str(e))
+    return pd.DataFrame(results)
 
-
-if __name__ == "__main__":
-    run_scraper()
+def save_df_to_excel(df, filename="jobs.xlsx"):
+    df.to_excel(filename, index=False)
+    return filename
