@@ -1,7 +1,7 @@
-flask
-selenium
+streamlit
 pandas
 openpyxl
+
 
 
 
