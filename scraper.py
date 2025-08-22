@@ -1,50 +1,43 @@
-import time
-import pandas as pd
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-
-def init_driver(headless=True, profile_dir=None):
-    options = Options()
-    if headless:
-        options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-
-    if profile_dir:
-        options.add_argument(f"user-data-dir={profile_dir}")
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    return driver
-
-
-def scrape_keywords(keywords, headless=True, profile_dir=None):
-    driver = init_driver(headless=headless, profile_dir=profile_dir)
-    results = []
-
+def run_scraper():
     try:
-        for keyword in keywords:
-            search_url = f"https://www.linkedin.com/search/results/content/?keywords={keyword}"
-            driver.get(search_url)
-            time.sleep(5)  # wait for page to load
+        # ✅ Set Chrome options
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")  # run without UI
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
 
-            posts = driver.find_elements(By.CLASS_NAME, "update-components-text")
-            for post in posts[:10]:  # limit to first 10 per keyword
-                results.append({
-                    "keyword": keyword,
-                    "post": post.text.strip()
-                })
-    finally:
+        # ✅ Point to where Render installs chromium & chromedriver
+        chrome_options.binary_location = "/usr/bin/chromium"
+        service = Service("/usr/bin/chromedriver")
+
+        # ✅ Launch driver
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.get("https://www.linkedin.com/")  # Example target
+
+        print("Page title:", driver.title)
+
+        # Example: wait for login button
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            print("Page loaded successfully!")
+        except TimeoutException:
+            print("Timeout: Page did not load in time.")
+
         driver.quit()
 
-    df = pd.DataFrame(results)
-    return df
+    except Exception as e:
+        print("Error while scraping:", str(e))
 
 
-def save_df_to_excel(df, filename="linkedin_results.xlsx"):
-    df.to_excel(filename, index=False)
-    return filename
+if __name__ == "__main__":
+    run_scraper()
