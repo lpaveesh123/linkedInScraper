@@ -1,5 +1,7 @@
 streamlit
-pandas
 selenium
+pandas
 openpyxl
+webdriver-manager
+
 
