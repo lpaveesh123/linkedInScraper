@@ -1,54 +1,36 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
 import pandas as pd
-import time
+import requests
+from bs4 import BeautifulSoup
 
-def scrape_keywords(keywords):
-    service = Service("/usr/bin/chromedriver")  # path for Render container
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
 
-    driver = webdriver.Chrome(service=service, options=options)
-
+def scrape_keywords(keyword: str, num_results: int = 10):
+    """
+    Scrape Google search results for the given keyword.
+    (This is a demo version using requests + BeautifulSoup.
+    For production, consider using SerpAPI or Google Custom Search API.)
+    """
     results = []
+    query = keyword.replace(" ", "+")
+    url = f"https://www.google.com/search?q={query}"
 
-    try:
-        for keyword in keywords:
-            url = f"https://www.linkedin.com/jobs/search/?keywords={keyword}"
-            driver.get(url)
-            time.sleep(3)
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
 
-            try:
-                job_cards = WebDriverWait(driver, 10).until(
-                    EC.presence_of_all_elements_located((By.CLASS_NAME, "base-card"))
-                )
-                for card in job_cards[:10]:  # scrape first 10 per keyword
-                    try:
-                        title = card.find_element(By.CLASS_NAME, "base-search-card__title").text
-                        company = card.find_element(By.CLASS_NAME, "base-search-card__subtitle").text
-                        location = card.find_element(By.CLASS_NAME, "job-search-card__location").text
-                        results.append({
-                            "Keyword": keyword,
-                            "Job Title": title,
-                            "Company": company,
-                            "Location": location
-                        })
-                    except NoSuchElementException:
-                        continue
-            except TimeoutException:
-                print(f"No jobs found for {keyword}")
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, "html.parser")
+        search_results = soup.select("h3")[:num_results]
 
-    finally:
-        driver.quit()
+        for idx, item in enumerate(search_results, start=1):
+            results.append({"Rank": idx, "Keyword": keyword, "Title": item.get_text()})
+    else:
+        results.append({"Rank": 1, "Keyword": keyword, "Title": "Failed to fetch"})
 
     return pd.DataFrame(results)
 
-def save_df_to_excel(df, filename="jobs.xlsx"):
+
+def save_df_to_excel(df: pd.DataFrame, filename: str = "results.xlsx"):
+    """
+    Save the DataFrame to an Excel file.
+    """
     df.to_excel(filename, index=False)
     return filename
