@@ -3,38 +3,72 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
+import pyperclip
 import pandas as pd
 import time
 import re
+import json
 from datetime import datetime
-from webdriver_manager.chrome import ChromeDriverManager
 
-# Base LinkedIn search URL
 ADV_BASE = "https://www.linkedin.com/search/results/content/?keywords={kw}&origin=FACETED_SEARCH&sortBy=%22date_posted%22"
 
+# -------------------------------
+# Load cookies
+# -------------------------------
+def load_cookies(driver, cookies_path="cookies.json"):
+    try:
+        with open(cookies_path, "r") as f:
+            cookies = json.load(f)
+        driver.get("https://www.linkedin.com")  # open before setting cookies
+        for cookie in cookies:
+            # selenium expects no "sameSite=None"
+            cookie.pop("sameSite", None)
+            driver.add_cookie(cookie)
+        driver.refresh()
+        time.sleep(3)
+        print("✅ Cookies loaded, logged in successfully")
+    except Exception as e:
+        print("⚠️ Could not load cookies:", e)
+
+# -------------------------------
+# Build URLs
+# -------------------------------
 def build_urls(keywords):
-    """Build search URLs from keywords"""
     return [ADV_BASE.format(kw=kw.strip().replace(" ", "%20")) for kw in keywords if kw.strip()]
 
-def make_driver(headless=True):
-    """Create Chrome driver for cloud (Render)"""
+# -------------------------------
+# Make driver
+# -------------------------------
+def make_driver(headless=True, chromedriver_path=None):
     options = webdriver.ChromeOptions()
     if headless:
         options.add_argument("--headless=new")
-    options.add_argument("--window-size=1280,2200")
+        options.add_argument("--window-size=1280,2200")
+        options.add_argument("--disable-gpu")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--start-maximized")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
 
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
+    if chromedriver_path:
+        service = Service(executable_path=chromedriver_path)
+        driver = webdriver.Chrome(service=service, options=options)
+    else:
+        driver = webdriver.Chrome(options=options)
     return driver
 
-def scrape_keywords(keywords, headless=True, scroll_rounds=5, sleep_between_scroll=2):
-    """Scrape LinkedIn posts for given keywords (requires you to be already logged in manually)"""
+# -------------------------------
+# Scraper
+# -------------------------------
+def scrape_keywords(keywords, headless=True, chromedriver_path=None, scroll_rounds=5, sleep_between_scroll=2, cookies_path="cookies.json"):
     urls = build_urls(keywords)
-    driver = make_driver(headless=headless)
+    driver = make_driver(headless=headless, chromedriver_path=chromedriver_path)
+
+    # Load cookies so LinkedIn session is authenticated
+    load_cookies(driver, cookies_path)
+
     all_results = []
     seen_links = set()
 
@@ -51,9 +85,9 @@ def scrape_keywords(keywords, headless=True, scroll_rounds=5, sleep_between_scro
     try:
         for search_url in urls:
             driver.get(search_url)
-            time.sleep(5)  # wait for page load
+            time.sleep(5)  # initial wait
 
-            # scroll to load posts
+            # Scroll to load posts
             for _ in range(scroll_rounds):
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(sleep_between_scroll)
@@ -63,7 +97,7 @@ def scrape_keywords(keywords, headless=True, scroll_rounds=5, sleep_between_scro
             for index, post in enumerate(posts):
                 try:
                     driver.execute_script("arguments[0].scrollIntoView(true);", post)
-                    time.sleep(1)
+                    time.sleep(1.5)
 
                     # --- Extract Name and Company ---
                     name, company = "", ""
@@ -105,8 +139,11 @@ def scrape_keywords(keywords, headless=True, scroll_rounds=5, sleep_between_scro
                             EC.presence_of_element_located((By.XPATH, "//h5[normalize-space()='Copy link to post']/ancestor::div[@role='button']"))
                         )
                         driver.execute_script("arguments[0].click();", copy_btn)
-                        time.sleep(1)
-                        post_link = driver.execute_script("return document.queryCommandSupported('copy');")
+                        time.sleep(1.5)
+                        driver.execute_script("window.getSelection().removeAllRanges();")
+                        driver.find_element(By.TAG_NAME, "body").click()
+                        time.sleep(0.5)
+                        post_link = pyperclip.paste().strip()
                     except:
                         post_link = ""
 
@@ -117,21 +154,23 @@ def scrape_keywords(keywords, headless=True, scroll_rounds=5, sleep_between_scro
                     except:
                         post_text = ""
 
-                    # --- Filter Posts ---
+                    # --- Include / Exclude filters ---
                     if post_link not in seen_links and any(k in post_text for k in include_keywords) and not any(k in post_text for k in exclude_keywords):
                         all_results.append({"Name": name, "Company": company, "Post Link": post_link})
                         seen_links.add(post_link)
 
                 except Exception as e:
-                    print(f"[{index}] Skipping post due to error: {e}")
+                    print(f"[{index}] Skipping post: {e}")
 
     finally:
         driver.quit()
 
     return pd.DataFrame(all_results, columns=["Name", "Company", "Post Link"])
 
+# -------------------------------
+# Save to Excel
+# -------------------------------
 def save_df_to_excel(df, prefix="linkedin_freelance_hybrid_posts"):
-    """Save dataframe to Excel with timestamp"""
     if df.empty:
         return ""
     today = datetime.now().strftime("%Y-%m-%d_%H%M%S")
