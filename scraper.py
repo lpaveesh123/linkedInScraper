@@ -1,22 +1,21 @@
-# scraper.py
 import time
 import pandas as pd
+import re
+import pyperclip
+from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
-import pyperclip
-import re
-from datetime import datetime
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 ADV_BASE = "https://www.linkedin.com/search/results/content/?keywords={kw}&origin=FACETED_SEARCH&sortBy=%22date_posted%22"
 
-def build_urls(keywords):
-    return [ADV_BASE.format(kw=kw.strip().replace(" ", "%20")) for kw in keywords if kw.strip()]
-
-def make_driver(headless=True):
+# -----------------------
+# Driver Setup
+# -----------------------
+def make_driver(headless=True, profile_dir=None):
     options = Options()
     if headless:
         options.add_argument("--headless=new")
@@ -24,16 +23,47 @@ def make_driver(headless=True):
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--remote-debugging-port=9222")
     options.add_argument("--disable-blink-features=AutomationControlled")
 
-    driver = webdriver.Chrome(options=options)
-    return driver
+    if profile_dir:  # local mode
+        options.add_argument(fr"--user-data-dir={profile_dir}")
+        options.add_argument("--profile-directory=Default")
 
-def scrape_keywords(keywords, scroll_rounds=5, sleep_between_scroll=2):
+    return webdriver.Chrome(options=options)
+
+
+# -----------------------
+# Build search URLs
+# -----------------------
+def build_urls(keywords):
+    return [ADV_BASE.format(kw=kw.strip().replace(" ", "%20")) for kw in keywords if kw.strip()]
+
+
+# -----------------------
+# LinkedIn Login (for server mode)
+# -----------------------
+def linkedin_login(driver, email, password):
+    try:
+        driver.get("https://www.linkedin.com/login")
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "username")))
+        driver.find_element(By.ID, "username").send_keys(email)
+        driver.find_element(By.ID, "password").send_keys(password)
+        driver.find_element(By.XPATH, "//button[@type='submit']").click()
+
+        # check login success
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "global-nav-search")))
+        print("✅ Login successful")
+        return True
+    except Exception as e:
+        print(f"❌ Login failed: {e}")
+        return False
+
+
+# -----------------------
+# Scraper Core
+# -----------------------
+def scrape_common(driver, keywords, scroll_rounds=5, sleep_between_scroll=2):
     urls = build_urls(keywords)
-    driver = make_driver(headless=True)
     all_results = []
     seen_links = set()
 
@@ -49,7 +79,7 @@ def scrape_keywords(keywords, scroll_rounds=5, sleep_between_scroll=2):
 
     try:
         for search_url in urls:
-            print(f"Navigating to {search_url}")
+            print(f"🌐 Navigating to {search_url}")
             driver.get(search_url)
             time.sleep(5)
 
@@ -58,6 +88,8 @@ def scrape_keywords(keywords, scroll_rounds=5, sleep_between_scroll=2):
                 time.sleep(sleep_between_scroll)
 
             posts = driver.find_elements(By.CSS_SELECTOR, 'div.feed-shared-update-v2')
+            if not posts:
+                print("⚠️ No posts found on this page.")
 
             for index, post in enumerate(posts):
                 try:
@@ -100,9 +132,7 @@ def scrape_keywords(keywords, scroll_rounds=5, sleep_between_scroll=2):
                         driver.execute_script("arguments[0].click();", menu_btn)
                         time.sleep(1)
                         copy_btn = WebDriverWait(driver, 5).until(
-                            EC.presence_of_element_located(
-                                (By.XPATH, "//h5[normalize-space()='Copy link to post']/ancestor::div[@role='button']")
-                            )
+                            EC.presence_of_element_located((By.XPATH, "//h5[normalize-space()='Copy link to post']/ancestor::div[@role='button']"))
                         )
                         driver.execute_script("arguments[0].click();", copy_btn)
                         time.sleep(1)
@@ -126,15 +156,37 @@ def scrape_keywords(keywords, scroll_rounds=5, sleep_between_scroll=2):
                         seen_links.add(post_link)
 
                 except Exception as e:
-                    print(f"[{index}] Skipping post: {e}")
+                    print(f"[{index}] ⚠️ Skipping post: {e}")
 
     finally:
         driver.quit()
-        print("Browser closed.")
+        print("✅ Browser closed.")
 
     return pd.DataFrame(all_results, columns=["Name", "Company", "Post Link"])
 
 
+# -----------------------
+# Public Functions
+# -----------------------
+def scrape_keywords(keywords, profile_dir=None):
+    """ Local mode (reuse Chrome login) """
+    driver = make_driver(headless=False, profile_dir=profile_dir)
+    return scrape_common(driver, keywords)
+
+
+def scrape_linkedin_with_login(email, password, keywords):
+    """ Server mode (Render.com, fresh login) """
+    driver = make_driver(headless=True)
+    success = linkedin_login(driver, email, password)
+    if not success:
+        driver.quit()
+        raise Exception("❌ LinkedIn login failed. Please check your credentials.")
+    return scrape_common(driver, keywords)
+
+
+# -----------------------
+# Save Excel
+# -----------------------
 def save_df_to_excel(df, prefix="linkedin_freelance_hybrid_posts"):
     if df.empty:
         return ""

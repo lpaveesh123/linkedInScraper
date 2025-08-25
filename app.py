@@ -1,37 +1,54 @@
 import streamlit as st
-import pandas as pd
-from scraper import scrape_linkedin, save_df_to_excel
+from scraper import scrape_keywords, scrape_linkedin_with_login, save_df_to_excel
 
 st.set_page_config(page_title="LinkedIn Scraper", layout="wide")
+st.title("🔎 LinkedIn Scraper")
 
-st.title("🔎 LinkedIn Profile Scraper")
+# Mode selection
+mode = st.radio("Choose mode:", ["Local (Reuse Chrome Profile)", "Server (Email/Password Login)"])
 
-# Login details input
-st.subheader("🔑 LinkedIn Login")
-email = st.text_input("Email", type="default")
-password = st.text_input("Password", type="password")
+keywords_input = st.text_area("📌 Enter keywords (one per line):", "Python Developer\nData Scientist")
 
-# Keyword input
-st.subheader("📌 Search Keywords")
-keywords_input = st.text_area("Enter keywords (one per line):", "Python Developer\nData Scientist")
+profile_dir = None
+email, password = None, None
 
-if st.button("Scrape"):
-    keywords = [kw.strip() for kw in keywords_input.split("\n") if kw.strip()]
-    if not email or not password:
-        st.error("⚠️ Please enter LinkedIn email and password.")
-    elif not keywords:
+if mode == "Local (Reuse Chrome Profile)":
+    st.info("✅ Local Mode: Will reuse your Chrome login session. Make sure you are logged in to LinkedIn in that Chrome profile.")
+    profile_dir = st.text_input("Enter Chrome Profile Path:", r"C:\Users\<YourUser>\AppData\Local\Google\Chrome\User Data")
+
+elif mode == "Server (Email/Password Login)":
+    st.info("🌐 Server Mode: Will log in with LinkedIn credentials each run.")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+
+if st.button("🚀 Start Scraping"):
+    keywords = [kw.strip() for kw in keywords_input.splitlines() if kw.strip()]
+
+    if not keywords:
         st.error("⚠️ Please enter at least one keyword.")
     else:
-        with st.spinner("Scraping LinkedIn... (this may take time)"):
+        with st.spinner("Scraping LinkedIn... Please wait ⏳"):
             try:
-                df = scrape_linkedin(email, password, keywords)
-                st.success("✅ Scraping completed!")
+                if mode == "Local (Reuse Chrome Profile)":
+                    df = scrape_keywords(keywords, profile_dir=profile_dir)
+                else:
+                    if not email or not password:
+                        st.error("⚠️ Please enter LinkedIn email and password.")
+                        st.stop()
+                    df = scrape_linkedin_with_login(email, password, keywords)
 
-                st.dataframe(df)
+                if df.empty:
+                    st.warning("⚠️ No relevant posts found. Try different keywords.")
+                else:
+                    st.success(f"✅ Scraping completed! {len(df)} posts found.")
+                    st.dataframe(df)
 
-                file = save_df_to_excel(df)
-                with open(file, "rb") as f:
-                    st.download_button("📥 Download Excel", f, file_name=file)
+                    file = save_df_to_excel(df)
+                    if file:
+                        with open(file, "rb") as f:
+                            st.download_button("📥 Download Excel", f, file_name=file)
+                    else:
+                        st.error("⚠️ No data to save.")
 
             except Exception as e:
-                st.error(f"❌ Error: {e}")
+                st.error(f"❌ Error during scraping: {e}")
