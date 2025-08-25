@@ -1,7 +1,6 @@
 streamlit
 selenium
 webdriver-manager
-chromium-browser==124.0.6367.207-r0
 chromedriver-binary-auto
 pandas
 openpyxl
