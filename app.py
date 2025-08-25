@@ -1,40 +1,53 @@
+import os
 import streamlit as st
-import pandas as pd
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
+# Import your scraper
 from scraper import scrape_keywords
 
-st.set_page_config(page_title="LinkedIn Scraper", page_icon="🔍", layout="wide")
-st.title("🔍 LinkedIn Scraper (Render Deployment)")
 
-# Input box for keywords
-keywords = st.text_area("Enter keywords (comma separated):")
+def get_driver():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
 
-# Headless is always True on Render (no UI browser available)
-headless = True  
+    # Use Chromium binary in Render
+    chrome_bin = "/usr/bin/chromium-browser"
+    if os.path.exists(chrome_bin):
+        chrome_options.binary_location = chrome_bin
 
-if st.button("Start Scraping"):
-    if not keywords.strip():
-        st.error("⚠️ Please enter at least one keyword before scraping.")
-    else:
+    return webdriver.Chrome(options=chrome_options)
+
+
+def main():
+    st.title("LinkedIn Keyword Scraper")
+
+    keywords = st.text_input("Enter keywords (comma-separated):")
+
+    if st.button("Scrape"):
+        if not keywords:
+            st.error("Please enter some keywords.")
+            return
+
         try:
-            keyword_list = [kw.strip() for kw in keywords.split(",") if kw.strip()]
-            
-            # Call scraper (Render safe: no profile_dir)
-            df = scrape_keywords(keyword_list, headless=headless)
+            driver = get_driver()
+            results = scrape_keywords(driver, keywords.split(","))
+            driver.quit()
 
-            if not df.empty:
-                st.success("✅ Scraping completed successfully!")
-                st.dataframe(df)
-
-                # CSV download button
-                csv = df.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    label="📥 Download results as CSV",
-                    data=csv,
-                    file_name="linkedin_results.csv",
-                    mime="text/csv",
-                )
-            else:
-                st.warning("⚠️ No data found for the given keywords.")
+            st.success("Scraping complete!")
+            for item in results:
+                st.write(item)
 
         except Exception as e:
-            st.error(f"❌ Scraping failed: {str(e)}")
+            st.error(f"Scraping failed: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()
