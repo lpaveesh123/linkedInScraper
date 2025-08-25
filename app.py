@@ -1,38 +1,51 @@
 import os
-import json
 import streamlit as st
-from scraper import scrape_keywords_with_cookies, save_df_to_excel
+from scraper import scrape_keywords, save_df_to_excel
+import tempfile
+import json
 
 st.title("LinkedIn Scraper (Keyword-based Search)")
 
+# -------------------------------
 # Upload cookies.json
+# -------------------------------
 cookies_file = st.file_uploader("Upload cookies.json for LinkedIn login", type="json")
 
+# -------------------------------
+# Keywords input
+# -------------------------------
 keywords_input = st.text_area("Enter keywords (one per line):", height=150)
 headless = st.checkbox("Run headless browser", value=True)
 
+# -------------------------------
+# Start scraping
+# -------------------------------
 if st.button("Start Scraping"):
+
     if not cookies_file:
         st.warning("⚠️ Please upload your cookies.json file.")
     elif not keywords_input.strip():
         st.warning("⚠️ Please enter at least one keyword.")
     else:
-        try:
-            # Load cookies from uploaded file
-            cookies = json.load(cookies_file)
-            
-            keywords = [kw.strip() for kw in keywords_input.splitlines() if kw.strip()]
-            
-            with st.spinner("🔍 Scraping LinkedIn posts, please wait..."):
-                # Call a scraper function that accepts cookies
-                df = scrape_keywords_with_cookies(keywords, cookies=cookies, headless=headless)
+        # Save uploaded cookies to a temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as tmp:
+            tmp.write(cookies_file.getvalue())
+            cookies_path = tmp.name
+
+        keywords = [kw.strip() for kw in keywords_input.splitlines() if kw.strip()]
+
+        with st.spinner("🔍 Scraping LinkedIn posts, please wait..."):
+            try:
+                # Call scraper with cookies_path
+                df = scrape_keywords(keywords, headless=headless, cookies_path=cookies_path)
 
                 if df.empty:
                     st.warning("No relevant posts found.")
                 else:
                     excel_path = save_df_to_excel(df)
                     st.success(f"✅ Scraping completed! {len(df)} posts found.")
-                    
+
+                    # Download button
                     with open(excel_path, "rb") as f:
                         st.download_button(
                             label="📥 Download Excel",
@@ -42,5 +55,6 @@ if st.button("Start Scraping"):
                         )
 
                     st.dataframe(df)
-        except Exception as e:
-            st.error(f"❌ Scraping failed: {e}")
+
+            except Exception as e:
+                st.error(f"❌ Scraping failed: {e}")
