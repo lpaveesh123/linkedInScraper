@@ -3,62 +3,51 @@ import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 
 
 def scrape_keywords(keywords, headless=True):
-    """Scrape LinkedIn search results for a list of keywords"""
-
-    options = webdriver.ChromeOptions()
+    """
+    Scrape LinkedIn posts for given keywords.
+    Works in headless mode for cloud publishing (Render, etc.).
+    """
+    chrome_options = Options()
     if headless:
-        options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
 
-    # Initialize driver
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    # Use webdriver_manager to auto-install ChromeDriver
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+
     data = []
-
     try:
         for keyword in keywords:
-            url = f"https://www.linkedin.com/search/results/people/?keywords={keyword}"
-            driver.get(url)
-            time.sleep(3)  # allow page to load
+            driver.get(f"https://www.linkedin.com/search/results/content/?keywords={keyword}")
+            time.sleep(5)
 
-            try:
-                # Wait for results
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_all_elements_located((By.CLASS_NAME, "entity-result__content"))
-                )
-                results = driver.find_elements(By.CLASS_NAME, "entity-result__content")
+            posts = driver.find_elements(By.CLASS_NAME, "entity-result__summary")
+            for post in posts:
+                try:
+                    text = post.text.strip()
+                    data.append({"Keyword": keyword, "Post": text})
+                except Exception:
+                    continue
 
-                for r in results:
-                    try:
-                        name = r.find_element(By.TAG_NAME, "span").text
-                    except NoSuchElementException:
-                        name = "N/A"
-
-                    try:
-                        occupation = r.find_element(By.CLASS_NAME, "entity-result__primary-subtitle").text
-                    except NoSuchElementException:
-                        occupation = "N/A"
-
-                    data.append({
-                        "Keyword": keyword,
-                        "Name": name,
-                        "Occupation": occupation
-                    })
-
-            except TimeoutException:
-                print(f"[ERROR] Timeout while loading results for keyword: {keyword}")
-
-    except Exception as e:
-        print(f"[SCRAPER ERROR] {e}")
-
+    except (NoSuchElementException, TimeoutException) as e:
+        print(f"Error while scraping: {e}")
     finally:
         driver.quit()
 
     return pd.DataFrame(data)
+
+
+def save_df_to_excel(df):
+    """Save DataFrame to Excel and return filename"""
+    filename = "linkedin_scraper_results.xlsx"
+    df.to_excel(filename, index=False)
+    return filename

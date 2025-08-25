@@ -1,27 +1,26 @@
 import streamlit as st
-import pandas as pd
-from scraper import scrape_keywords
+from scraper import scrape_keywords, save_df_to_excel
 
-st.title("🔍 LinkedIn Scraper")
+st.title("LinkedIn Scraper (Keyword-based Search)")
 
-keywords_input = st.text_area("Enter keywords (comma separated)", "Python Developer, Data Scientist")
-keywords = [kw.strip() for kw in keywords_input.split(",") if kw.strip()]
+keywords_input = st.text_area("Enter keywords (one per line):", height=150)
+headless = st.checkbox("Run headless browser", value=True)
 
-if st.button("Scrape"):
-    if not keywords:
-        st.error("⚠ Please enter at least one keyword.")
+if st.button("Start Scraping"):
+    if not keywords_input.strip():
+        st.warning("⚠️ Please enter at least one keyword.")
     else:
-        try:
-            with st.spinner("Scraping in progress..."):
-                df = scrape_keywords(keywords, headless=True)
-
-            if not df.empty:
-                st.success("✅ Scraping completed successfully!")
-                st.dataframe(df)
-                csv = df.to_csv(index=False).encode("utf-8")
-                st.download_button("Download CSV", data=csv, file_name="linkedin_results.csv", mime="text/csv")
-            else:
-                st.warning("⚠ No results found. Try different keywords or login manually in development mode.")
-
-        except Exception as e:
-            st.error(f"❌ Scraping failed: {e}")
+        keywords = [kw.strip() for kw in keywords_input.splitlines() if kw.strip()]
+        with st.spinner("Scraping LinkedIn posts, please wait..."):
+            try:
+                df = scrape_keywords(keywords, headless=headless)
+                if df.empty:
+                    st.warning("No relevant posts found.")
+                else:
+                    excel_path = save_df_to_excel(df)
+                    st.success(f"✅ Scraping completed! {len(df)} posts found.")
+                    with open(excel_path, "rb") as f:
+                        st.download_button("📥 Download Excel", f, file_name=excel_path)
+                    st.dataframe(df)
+            except Exception as e:
+                st.error(f"❌ Scraping failed: {e}")
