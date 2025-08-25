@@ -1,33 +1,40 @@
 import streamlit as st
-from scraper import scrape_keywords, save_df_to_excel
-import os
+import pandas as pd
+from scraper import scrape_keywords
 
-st.title("LinkedIn Scraper (Keyword-based Search)")
+st.set_page_config(page_title="LinkedIn Scraper", page_icon="🔍", layout="wide")
+st.title("🔍 LinkedIn Scraper (Render Deployment)")
 
-keywords_input = st.text_area("Enter keywords (one per line):", height=150)
-headless = st.checkbox("Run headless browser", value=True)
+# Input box for keywords
+keywords = st.text_area("Enter keywords (comma separated):")
+
+# Headless is always True on Render (no UI browser available)
+headless = True  
 
 if st.button("Start Scraping"):
-    if not keywords_input.strip():
-        st.warning("Please enter at least one keyword.")
+    if not keywords.strip():
+        st.error("⚠️ Please enter at least one keyword before scraping.")
     else:
-        keywords = [kw.strip() for kw in keywords_input.splitlines() if kw.strip()]
+        try:
+            keyword_list = [kw.strip() for kw in keywords.split(",") if kw.strip()]
+            
+            # Call scraper (Render safe: no profile_dir)
+            df = scrape_keywords(keyword_list, headless=headless)
 
-        # On Render we cannot use Windows path, so set profile directory in /tmp
-        profile_dir = os.path.join("/tmp", "LinkedInScraperProfile")
+            if not df.empty:
+                st.success("✅ Scraping completed successfully!")
+                st.dataframe(df)
 
-        with st.spinner("Scraping LinkedIn posts, please wait..."):
-            try:
-                df = scrape_keywords(keywords, headless=headless, profile_dir=profile_dir)
-                if df.empty:
-                    st.warning("No relevant posts found.")
-                else:
-                    excel_path = save_df_to_excel(df)
-                    st.success(f"Scraping completed! {len(df)} posts found.")
-                    with open(excel_path, "rb") as f:
-                        st.download_button(
-                            "Download Excel", f, file_name=os.path.basename(excel_path)
-                        )
-                    st.dataframe(df)
-            except Exception as e:
-                st.error(f"Scraping failed: {e}")
+                # CSV download button
+                csv = df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="📥 Download results as CSV",
+                    data=csv,
+                    file_name="linkedin_results.csv",
+                    mime="text/csv",
+                )
+            else:
+                st.warning("⚠️ No data found for the given keywords.")
+
+        except Exception as e:
+            st.error(f"❌ Scraping failed: {str(e)}")
