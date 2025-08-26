@@ -16,7 +16,6 @@ Thumbs.db
 .idea/
 
 # Environment & secret files
-cookies.json
 .env
 
 # Streamlit logs
