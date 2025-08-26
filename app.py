@@ -1,27 +1,41 @@
 import streamlit as st
-from scraper import scrape_keywords, save_to_excel
+import os
+import logging
+from scraper import scrape_keywords
 
-st.set_page_config(page_title="LinkedIn Scraper", layout="centered")
+# Setup logging for Streamlit
+logging.basicConfig(
+    filename="scraper.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
 st.title("🔎 LinkedIn Scraper")
+st.write("Enter a keyword and scrape LinkedIn posts.")
 
-keyword = st.text_input("Enter keyword to search on LinkedIn")
-max_posts = st.number_input("Max posts to fetch", min_value=1, max_value=100, value=20)
+keyword = st.text_input("Keyword", "")
+max_scrolls = st.slider("Scroll Depth", 1, 10, 3)
 
 if st.button("Start Scraping"):
     if not keyword.strip():
-        st.error("⚠️ Please enter a keyword before scraping.")
+        st.error("⚠️ Please enter a keyword first.")
     else:
-        with st.spinner("Scraping posts..."):
-            posts = scrape_keywords(keyword, max_posts)
+        try:
+            st.info(f"Starting scrape for **{keyword}**...")
+            result_file = scrape_keywords(keyword, max_scrolls=max_scrolls)
 
-        if posts is None:
+            if result_file:
+                st.success("✅ Scraping completed successfully!")
+                with open(result_file, "rb") as f:
+                    st.download_button(
+                        label="📥 Download Excel",
+                        data=f,
+                        file_name=result_file,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+            else:
+                st.warning("⚠️ No relevant posts found for this keyword.")
+
+        except Exception as e:
             st.error("❌ An error occurred while scraping. Check logs.")
-        elif len(posts) == 0:
-            st.warning("⚠️ No relevant posts found for this keyword.")
-        else:
-            st.success(f"✅ Found {len(posts)} posts for '{keyword}'")
-            msg = save_to_excel(posts, "output.xlsx")
-            st.info(msg)
-            if "saved to" in msg:
-                with open("output.xlsx", "rb") as f:
-                    st.download_button("📥 Download Excel", f, file_name="output.xlsx")
+            logging.error(f"Streamlit Error: {e}")
