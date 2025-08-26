@@ -2,7 +2,6 @@ import os
 import streamlit as st
 from scraper import scrape_keywords, save_df_to_excel
 import tempfile
-import json
 
 st.title("LinkedIn Scraper (Keyword-based Search)")
 
@@ -36,25 +35,23 @@ if st.button("Start Scraping"):
 
         with st.spinner("🔍 Scraping LinkedIn posts, please wait..."):
             try:
-                # Call scraper with cookies_path
                 df = scrape_keywords(keywords, headless=headless, cookies_path=cookies_path)
 
                 if df.empty:
-                    st.warning("No relevant posts found.")
+                    st.warning("⚠️ No relevant posts found.")
                 else:
                     excel_path = save_df_to_excel(df)
-                    st.success(f"✅ Scraping completed! {len(df)} posts found.")
-
-                    # Download button
-                    with open(excel_path, "rb") as f:
-                        st.download_button(
-                            label="📥 Download Excel",
-                            data=f,
-                            file_name=os.path.basename(excel_path),
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
-
-                    st.dataframe(df)
-
+                    if excel_path:
+                        st.success(f"✅ Scraping completed! {len(df)} posts found.")
+                        with open(excel_path, "rb") as f:
+                            st.download_button(
+                                label="📥 Download Excel",
+                                data=f,
+                                file_name=os.path.basename(excel_path),
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                        st.dataframe(df)
+                    else:
+                        st.warning("⚠️ Could not save Excel file, but data was scraped.")
             except Exception as e:
                 st.error(f"❌ Scraping failed: {e}")

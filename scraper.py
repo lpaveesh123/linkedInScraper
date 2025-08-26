@@ -4,7 +4,6 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
-import pyperclip
 import pandas as pd
 import time
 import re
@@ -20,22 +19,28 @@ def load_cookies(driver, cookies_path="cookies.json"):
     try:
         with open(cookies_path, "r") as f:
             cookies = json.load(f)
-        driver.get("https://www.linkedin.com")  # open before setting cookies
+        driver.get("https://www.linkedin.com")
         for cookie in cookies:
-            # selenium expects no "sameSite=None"
             cookie.pop("sameSite", None)
             driver.add_cookie(cookie)
         driver.refresh()
         time.sleep(3)
-        print("✅ Cookies loaded, logged in successfully")
+
+        if "feed" not in driver.current_url:
+            print("⚠️ Cookies may be invalid, login failed.")
+        else:
+            print("✅ Cookies loaded, logged in successfully")
     except Exception as e:
-        print("⚠️ Could not load cookies:", e)
+        raise RuntimeError(f"Could not load cookies: {e}")
 
 # -------------------------------
 # Build URLs
 # -------------------------------
 def build_urls(keywords):
-    return [ADV_BASE.format(kw=kw.strip().replace(" ", "%20")) for kw in keywords if kw.strip()]
+    urls = [ADV_BASE.format(kw=kw.strip().replace(" ", "%20")) for kw in keywords if kw.strip()]
+    if not urls:
+        raise ValueError("No keywords provided to build search URLs.")
+    return urls
 
 # -------------------------------
 # Make driver
@@ -52,40 +57,42 @@ def make_driver(headless=True, chromedriver_path=None):
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
 
-    if chromedriver_path:
-        service = Service(executable_path=chromedriver_path)
-        driver = webdriver.Chrome(service=service, options=options)
-    else:
-        driver = webdriver.Chrome(options=options)
-    return driver
+    try:
+        if chromedriver_path:
+            service = Service(executable_path=chromedriver_path)
+            driver = webdriver.Chrome(service=service, options=options)
+        else:
+            driver = webdriver.Chrome(options=options)
+        return driver
+    except Exception as e:
+        raise RuntimeError(f"Failed to start ChromeDriver: {e}")
 
 # -------------------------------
 # Scraper
 # -------------------------------
 def scrape_keywords(keywords, headless=True, chromedriver_path=None, scroll_rounds=5, sleep_between_scroll=2, cookies_path="cookies.json"):
-    urls = build_urls(keywords)
     driver = make_driver(headless=headless, chromedriver_path=chromedriver_path)
 
-    # Load cookies so LinkedIn session is authenticated
-    load_cookies(driver, cookies_path)
-
-    all_results = []
-    seen_links = set()
-
-    include_keywords = [
-        "freelancer", "hiring hybrid", "hybrid role", "remote or hybrid",
-        "looking for freelancer", "freelance opportunity", "partner with us",
-        "collaboration", "need freelance", "freelance partner", "zoho partner", "zoho consultant"
-    ]
-    exclude_keywords = [
-        "full-time", "onsite", "in-office", "permanent", "work from office",
-        "join full-time", "full time job"
-    ]
-
     try:
+        urls = build_urls(keywords)
+        load_cookies(driver, cookies_path)
+
+        all_results = []
+        seen_links = set()
+
+        include_keywords = [
+            "freelancer", "hiring hybrid", "hybrid role", "remote or hybrid",
+            "looking for freelancer", "freelance opportunity", "partner with us",
+            "collaboration", "need freelance", "freelance partner", "zoho partner", "zoho consultant"
+        ]
+        exclude_keywords = [
+            "full-time", "onsite", "in-office", "permanent", "work from office",
+            "join full-time", "full time job"
+        ]
+
         for search_url in urls:
             driver.get(search_url)
-            time.sleep(5)  # initial wait
+            time.sleep(5)
 
             # Scroll to load posts
             for _ in range(scroll_rounds):
@@ -93,13 +100,16 @@ def scrape_keywords(keywords, headless=True, chromedriver_path=None, scroll_roun
                 time.sleep(sleep_between_scroll)
 
             posts = driver.find_elements(By.CSS_SELECTOR, 'div.feed-shared-update-v2')
+            if not posts:
+                print(f"⚠️ No posts found for keyword URL: {search_url}")
+                continue
 
             for index, post in enumerate(posts):
                 try:
                     driver.execute_script("arguments[0].scrollIntoView(true);", post)
-                    time.sleep(1.5)
+                    time.sleep(1)
 
-                    # --- Extract Name and Company ---
+                    # --- Extract Name & Company ---
                     name, company = "", ""
                     try:
                         name_block = post.find_element(By.CSS_SELECTOR, 'span.update-components-actor__title')
@@ -108,42 +118,17 @@ def scrape_keywords(keywords, headless=True, chromedriver_path=None, scroll_roun
                         name_line = lines[0].strip()
                         company_line = lines[1].strip() if len(lines) > 1 else ""
                         name = re.sub(r'•\s*\d+(st|nd|rd|th)?\+?', '', name_line).strip()
-                        if "-" in company_line:
-                            company = company_line.split("-")[-1].strip()
-                        elif " at " in company_line.lower():
-                            parts = re.split(r"\sat\s", company_line, flags=re.IGNORECASE)
-                            company = parts[-1].strip() if len(parts) > 1 else company_line
-                        else:
-                            company = company_line
+                        company = company_line
                         if any(k in name.lower() for k in ["pvt","private","tech","llp","solutions","inc","group","corp"]):
                             company = name
                             name = ""
                     except:
-                        try:
-                            fallback_name = post.find_element(By.CSS_SELECTOR, 'span.feed-shared-actor__name').text.strip()
-                            if any(k in fallback_name.lower() for k in ["pvt","private","llp","tech","solutions","inc","corp"]):
-                                company = fallback_name
-                                name = ""
-                            else:
-                                name = fallback_name
-                        except:
-                            name, company = "", ""
+                        pass
 
                     # --- Extract Post Link ---
-                    post_link = ""
                     try:
-                        menu_btn = post.find_element(By.CSS_SELECTOR, 'div.feed-shared-control-menu button')
-                        driver.execute_script("arguments[0].click();", menu_btn)
-                        time.sleep(1)
-                        copy_btn = WebDriverWait(driver, 5).until(
-                            EC.presence_of_element_located((By.XPATH, "//h5[normalize-space()='Copy link to post']/ancestor::div[@role='button']"))
-                        )
-                        driver.execute_script("arguments[0].click();", copy_btn)
-                        time.sleep(1.5)
-                        driver.execute_script("window.getSelection().removeAllRanges();")
-                        driver.find_element(By.TAG_NAME, "body").click()
-                        time.sleep(0.5)
-                        post_link = pyperclip.paste().strip()
+                        post_link_elem = post.find_element(By.CSS_SELECTOR, "a.app-aware-link")
+                        post_link = post_link_elem.get_attribute("href")
                     except:
                         post_link = ""
 
@@ -154,26 +139,33 @@ def scrape_keywords(keywords, headless=True, chromedriver_path=None, scroll_roun
                     except:
                         post_text = ""
 
-                    # --- Include / Exclude filters ---
-                    if post_link not in seen_links and any(k in post_text for k in include_keywords) and not any(k in post_text for k in exclude_keywords):
-                        all_results.append({"Name": name, "Company": company, "Post Link": post_link})
-                        seen_links.add(post_link)
+                    # --- Apply filters ---
+                    if post_link and post_link not in seen_links:
+                        if any(k in post_text for k in include_keywords) and not any(k in post_text for k in exclude_keywords):
+                            all_results.append({"Name": name, "Company": company, "Post Link": post_link})
+                            seen_links.add(post_link)
 
                 except Exception as e:
-                    print(f"[{index}] Skipping post: {e}")
+                    print(f"[{index}] Skipping post due to error: {e}")
+
+        return pd.DataFrame(all_results, columns=["Name", "Company", "Post Link"])
+
+    except Exception as e:
+        raise RuntimeError(f"Error in scrape_keywords: {e}")
 
     finally:
         driver.quit()
-
-    return pd.DataFrame(all_results, columns=["Name", "Company", "Post Link"])
 
 # -------------------------------
 # Save to Excel
 # -------------------------------
 def save_df_to_excel(df, prefix="linkedin_freelance_hybrid_posts"):
-    if df.empty:
-        return ""
-    today = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    fname = f"{prefix}_{today}.xlsx"
-    df.to_excel(fname, index=False)
-    return fname
+    try:
+        if df.empty:
+            return ""
+        today = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        fname = f"{prefix}_{today}.xlsx"
+        df.to_excel(fname, index=False)
+        return fname
+    except Exception as e:
+        raise RuntimeError(f"Error saving Excel file: {e}")
