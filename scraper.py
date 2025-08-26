@@ -1,171 +1,113 @@
+import time
+import json
+import os
+import pandas as pd
 from selenium import webdriver
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
-import pandas as pd
-import time
-import re
-import json
-from datetime import datetime
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 
-ADV_BASE = "https://www.linkedin.com/search/results/content/?keywords={kw}&origin=FACETED_SEARCH&sortBy=%22date_posted%22"
+COOKIES_FILE = "cookies.json"
 
-# -------------------------------
-# Load cookies
-# -------------------------------
-def load_cookies(driver, cookies_path="cookies.json"):
-    try:
-        with open(cookies_path, "r") as f:
+def load_cookies():
+    """Load LinkedIn cookies from file"""
+    if not os.path.exists(COOKIES_FILE):
+        raise FileNotFoundError("❌ cookies.json not found. Please add your LinkedIn cookies.")
+    
+    with open(COOKIES_FILE, "r") as f:
+        try:
             cookies = json.load(f)
-        driver.get("https://www.linkedin.com")
-        for cookie in cookies:
-            cookie.pop("sameSite", None)
-            driver.add_cookie(cookie)
-        driver.refresh()
-        time.sleep(3)
+        except json.JSONDecodeError:
+            raise ValueError("❌ cookies.json is not valid JSON.")
+    
+    if not cookies:
+        raise ValueError("❌ cookies.json is empty.")
+    return cookies
 
-        if "feed" not in driver.current_url:
-            print("⚠️ Cookies may be invalid, login failed.")
-        else:
-            print("✅ Cookies loaded, logged in successfully")
-    except Exception as e:
-        raise RuntimeError(f"Could not load cookies: {e}")
 
-# -------------------------------
-# Build URLs
-# -------------------------------
-def build_urls(keywords):
-    urls = [ADV_BASE.format(kw=kw.strip().replace(" ", "%20")) for kw in keywords if kw.strip()]
-    if not urls:
-        raise ValueError("No keywords provided to build search URLs.")
-    return urls
-
-# -------------------------------
-# Make driver
-# -------------------------------
-def make_driver(headless=True, chromedriver_path=None):
-    options = webdriver.ChromeOptions()
-    if headless:
+def init_driver():
+    """Initialize Chrome WebDriver"""
+    try:
+        options = webdriver.ChromeOptions()
         options.add_argument("--headless=new")
-        options.add_argument("--window-size=1280,2200")
         options.add_argument("--disable-gpu")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--start-maximized")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
 
-    try:
-        if chromedriver_path:
-            service = Service(executable_path=chromedriver_path)
-            driver = webdriver.Chrome(service=service, options=options)
-        else:
-            driver = webdriver.Chrome(options=options)
+        service = Service()
+        driver = webdriver.Chrome(service=service, options=options)
+        driver.set_page_load_timeout(60)
         return driver
-    except Exception as e:
-        raise RuntimeError(f"Failed to start ChromeDriver: {e}")
+    except WebDriverException as e:
+        raise RuntimeError(f"❌ Failed to initialize Chrome driver: {e}")
 
-# -------------------------------
-# Scraper
-# -------------------------------
-def scrape_keywords(keywords, headless=True, chromedriver_path=None, scroll_rounds=5, sleep_between_scroll=2, cookies_path="cookies.json"):
-    driver = make_driver(headless=headless, chromedriver_path=chromedriver_path)
 
+def login_with_cookies(driver, cookies):
+    """Login to LinkedIn using saved cookies"""
+    driver.get("https://www.linkedin.com/")
+    time.sleep(2)
+
+    for cookie in cookies:
+        if "sameSite" in cookie and cookie["sameSite"] == "None":
+            cookie["sameSite"] = "Strict"
+        try:
+            driver.add_cookie(cookie)
+        except Exception:
+            pass  
+
+    driver.refresh()
+    time.sleep(3)
+
+
+def scrape_keywords(keyword, max_posts=20):
+    """Scrape LinkedIn posts for a given keyword"""
+    driver = None
     try:
-        urls = build_urls(keywords)
-        load_cookies(driver, cookies_path)
+        cookies = load_cookies()
+        driver = init_driver()
+        login_with_cookies(driver, cookies)
 
-        all_results = []
-        seen_links = set()
+        search_url = f"https://www.linkedin.com/search/results/content/?keywords={keyword}&origin=GLOBAL_SEARCH_HEADER"
+        driver.get(search_url)
 
-        include_keywords = [
-            "freelancer", "hiring hybrid", "hybrid role", "remote or hybrid",
-            "looking for freelancer", "freelance opportunity", "partner with us",
-            "collaboration", "need freelance", "freelance partner", "zoho partner", "zoho consultant"
-        ]
-        exclude_keywords = [
-            "full-time", "onsite", "in-office", "permanent", "work from office",
-            "join full-time", "full time job"
-        ]
+        posts_data = []
+        wait = WebDriverWait(driver, 10)
 
-        for search_url in urls:
-            driver.get(search_url)
-            time.sleep(5)
+        try:
+            post_elements = wait.until(
+                EC.presence_of_all_elements_located((By.CLASS_NAME, "update-components-text"))
+            )
+        except TimeoutException:
+            return []  # No posts found
 
-            # Scroll to load posts
-            for _ in range(scroll_rounds):
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(sleep_between_scroll)
-
-            posts = driver.find_elements(By.CSS_SELECTOR, 'div.feed-shared-update-v2')
-            if not posts:
-                print(f"⚠️ No posts found for keyword URL: {search_url}")
+        for idx, post in enumerate(post_elements[:max_posts]):
+            try:
+                text = post.text.strip()
+                if text:
+                    posts_data.append({"Keyword": keyword, "Post": text})
+            except Exception:
                 continue
 
-            for index, post in enumerate(posts):
-                try:
-                    driver.execute_script("arguments[0].scrollIntoView(true);", post)
-                    time.sleep(1)
-
-                    # --- Extract Name & Company ---
-                    name, company = "", ""
-                    try:
-                        name_block = post.find_element(By.CSS_SELECTOR, 'span.update-components-actor__title')
-                        full_text = name_block.text.strip()
-                        lines = full_text.split('\n')
-                        name_line = lines[0].strip()
-                        company_line = lines[1].strip() if len(lines) > 1 else ""
-                        name = re.sub(r'•\s*\d+(st|nd|rd|th)?\+?', '', name_line).strip()
-                        company = company_line
-                        if any(k in name.lower() for k in ["pvt","private","tech","llp","solutions","inc","group","corp"]):
-                            company = name
-                            name = ""
-                    except:
-                        pass
-
-                    # --- Extract Post Link ---
-                    try:
-                        post_link_elem = post.find_element(By.CSS_SELECTOR, "a.app-aware-link")
-                        post_link = post_link_elem.get_attribute("href")
-                    except:
-                        post_link = ""
-
-                    # --- Extract Post Text ---
-                    try:
-                        post_text_elem = post.find_element(By.CSS_SELECTOR, 'div.feed-shared-update-v2__description span.break-words')
-                        post_text = post_text_elem.text.lower().strip()
-                    except:
-                        post_text = ""
-
-                    # --- Apply filters ---
-                    if post_link and post_link not in seen_links:
-                        if any(k in post_text for k in include_keywords) and not any(k in post_text for k in exclude_keywords):
-                            all_results.append({"Name": name, "Company": company, "Post Link": post_link})
-                            seen_links.add(post_link)
-
-                except Exception as e:
-                    print(f"[{index}] Skipping post due to error: {e}")
-
-        return pd.DataFrame(all_results, columns=["Name", "Company", "Post Link"])
+        return posts_data
 
     except Exception as e:
-        raise RuntimeError(f"Error in scrape_keywords: {e}")
-
+        print(f"❌ Error in scrape_keywords: {e}")
+        return None
     finally:
-        driver.quit()
+        if driver:
+            driver.quit()
 
-# -------------------------------
-# Save to Excel
-# -------------------------------
-def save_df_to_excel(df, prefix="linkedin_freelance_hybrid_posts"):
+
+def save_to_excel(data, filename="output.xlsx"):
+    """Save scraped data to Excel"""
+    if not data:
+        return "⚠️ No relevant posts found. Excel not created."
+    
     try:
-        if df.empty:
-            return ""
-        today = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        fname = f"{prefix}_{today}.xlsx"
-        df.to_excel(fname, index=False)
-        return fname
+        df = pd.DataFrame(data)
+        df.to_excel(filename, index=False)
+        return f"✅ Data saved to {filename}"
     except Exception as e:
-        raise RuntimeError(f"Error saving Excel file: {e}")
+        return f"❌ Failed to save Excel: {e}"
