@@ -5,6 +5,7 @@ chromedriver-binary-auto
 pandas
 openpyxl
 pyperclip
+numpy
 
 
 

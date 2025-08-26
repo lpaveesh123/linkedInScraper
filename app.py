@@ -1,24 +1,31 @@
 import streamlit as st
-from scraper import scrape_keywords
+import pandas as pd
+from scraper import scrape_linkedin_posts
 
-st.set_page_config(page_title="LinkedIn Scraper Demo", layout="centered")
+st.set_page_config(page_title="LinkedIn Scraper", layout="wide")
 
-st.title("🔎 LinkedIn Scraper Demo")
+st.title("🔍 LinkedIn Scraper (Cookie Based)")
 
-keyword = st.text_input("Enter a keyword:", "")
+keywords_input = st.text_area("Enter keywords (one per line):")
+start_button = st.button("Start Scraping")
 
-if st.button("Search"):
-    if not keyword.strip():
-        st.warning("⚠️ Please enter a keyword.")
-    else:
-        with st.spinner("Scraping posts..."):
-            posts, error = scrape_keywords(keyword)
+if start_button and keywords_input.strip():
+    keywords = [kw.strip() for kw in keywords_input.splitlines() if kw.strip()]
+    
+    all_results = []
+    for kw in keywords:
+        st.write(f"Scraping posts for **{kw}** ...")
+        df = scrape_linkedin_posts(kw, limit=5)
+        all_results.append(df)
 
-        if error:
-            st.error(error)
-        elif posts:
-            st.success(f"✅ Found {len(posts)} posts for '{keyword}'")
-            for idx, post in enumerate(posts, 1):
-                st.write(f"**Post {idx}:** {post}")
-        else:
-            st.warning(f"No results for '{keyword}'.")
+    final_df = pd.concat(all_results, ignore_index=True)
+    st.dataframe(final_df)
+
+    # Download as CSV
+    csv = final_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="📥 Download CSV",
+        data=csv,
+        file_name="linkedin_posts.csv",
+        mime="text/csv",
+    )

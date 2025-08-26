@@ -1,45 +1,57 @@
+import json
+import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
-import time
+import pandas as pd
 
-ADV_BASE = "https://www.linkedin.com/search/results/content/?keywords={kw}&origin=GLOBAL_SEARCH_HEADER"
 
-def scrape_keywords(keyword: str):
+def linkedin_login_with_cookies(driver, cookies_file="cookies.json"):
+    """Login to LinkedIn using saved cookies"""
+    driver.get("https://www.linkedin.com/")
+    time.sleep(2)
+
+    # Load cookies
+    with open(cookies_file, "r") as f:
+        cookies = json.load(f)
+
+    for cookie in cookies:
+        if "sameSite" in cookie and cookie["sameSite"] == "None":
+            cookie["sameSite"] = "Strict"
+        driver.add_cookie(cookie)
+
+    driver.refresh()
+    time.sleep(3)
+    print("✅ Logged in with cookies")
+
+
+def scrape_linkedin_posts(keyword, cookies_file="cookies.json", limit=5):
+    """Scrape LinkedIn posts for a given keyword"""
+    options = Options()
+    options.add_argument("--headless")  # comment this if you want browser window
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+
+    driver = webdriver.Chrome(options=options)
+
     try:
-        # Selenium setup
-        options = Options()
-        options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        driver = webdriver.Chrome(service=Service(), options=options)
+        linkedin_login_with_cookies(driver, cookies_file)
 
-        driver.get(ADV_BASE.format(kw=keyword))
-        wait = WebDriverWait(driver, 20)
+        url = f"https://www.linkedin.com/search/results/content/?keywords={keyword}&origin=FACETED_SEARCH"
+        driver.get(url)
+        time.sleep(5)
 
         posts_data = []
-        try:
-            posts = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.feed-shared-update-v2")))
-        except TimeoutException:
-            driver.quit()
-            return [], f"No posts found for '{keyword}'"
+        posts = driver.find_elements(By.CLASS_NAME, "update-components-text")[:limit]
 
-        # Fetch only first 3 posts
-        for post in posts[:3]:
-            try:
-                text = post.text.strip().split("\n")[0]  # take first line
-                posts_data.append(text)
-            except Exception:
-                posts_data.append("Error reading post")
+        for idx, post in enumerate(posts, start=1):
+            text = post.text.strip()
+            posts_data.append({"Keyword": keyword, "Post #": idx, "Content": text})
 
+        return pd.DataFrame(posts_data)
+
+    finally:
         driver.quit()
-        return posts_data, None
-
-    except WebDriverException as e:
-        return [], f"Selenium error: {str(e)}"
-    except Exception as e:
-        return [], f"Unexpected error: {str(e)}"
