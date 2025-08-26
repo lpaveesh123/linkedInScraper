@@ -1,90 +1,104 @@
-import time
+import os
 import json
+import time
 import logging
 import pandas as pd
+from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 
 # Setup logging
+LOG_FILE = os.path.join(os.path.dirname(__file__), "scraper.log")
 logging.basicConfig(
-    filename="scraper.log",
+    filename=LOG_FILE,
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-def load_cookies(driver, cookie_file="cookies.json"):
-    """Load LinkedIn cookies from a file into the browser."""
-    try:
-        with open(cookie_file, "r") as f:
-            cookies = json.load(f)
+COOKIES_FILE = os.path.join(os.path.dirname(__file__), "cookies.json")
+SEARCH_URL = "https://www.linkedin.com/search/results/content/?keywords={kw}&origin=FACETED_SEARCH"
 
-        driver.get("https://www.linkedin.com")  
+def load_cookies(driver):
+    """Load cookies into the Selenium session."""
+    if not os.path.exists(COOKIES_FILE):
+        logging.error("Cookies file not found.")
+        return False
+    
+    try:
+        with open(COOKIES_FILE, "r") as f:
+            cookies = json.load(f)
+        for cookie in cookies:
+            driver.add_cookie(cookie)
+        logging.info("Cookies loaded successfully.")
+        return True
+    except Exception as e:
+        logging.error(f"Could not load cookies: {e}")
+        return False
+
+
+def scrape_keywords(keyword):
+    """Scrape LinkedIn posts for a given keyword."""
+    logging.info(f"Starting scrape for {keyword}")
+
+    try:
+        # Setup Chrome options
+        chrome_options = Options()
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+
+        driver = webdriver.Chrome(service=Service(), options=chrome_options)
+        driver.set_page_load_timeout(60)
+
+        driver.get("https://www.linkedin.com")
         time.sleep(2)
 
-        for cookie in cookies:
-            cookie.pop("sameSite", None)
-            driver.add_cookie(cookie)
+        if not load_cookies(driver):
+            driver.quit()
+            return f"❌ Failed: Could not load cookies."
 
-        logging.info("✅ Cookies loaded successfully")
-    except Exception as e:
-        logging.error(f"❌ Error loading cookies: {e}")
-        raise
+        driver.get(SEARCH_URL.format(kw=keyword))
+        time.sleep(5)
 
-def scrape_keywords(keyword, max_scrolls=3):
-    """Scrape LinkedIn posts by keyword and save to Excel."""
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+        try:
+            posts = WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.update-components-text"))
+            )
+        except TimeoutException:
+            driver.quit()
+            logging.warning(f"No relevant posts found for keyword: {keyword}")
+            return f"⚠️ No relevant posts found for '{keyword}'."
 
-    driver = webdriver.Chrome(options=options)
+        if not posts:
+            driver.quit()
+            logging.warning(f"No relevant posts found for keyword: {keyword}")
+            return f"⚠️ No relevant posts found for '{keyword}'."
 
-    try:
-        load_cookies(driver)
-
-        search_url = f"https://www.linkedin.com/search/results/content/?keywords={keyword}&origin=GLOBAL_SEARCH_HEADER"
-        driver.get(search_url)
-        logging.info(f"🔎 Searching for keyword: {keyword}")
-        time.sleep(3)
-
-        posts_data = []
-        scrolls = 0
-
-        while scrolls < max_scrolls:
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(3)
-            scrolls += 1
-
-            posts = driver.find_elements(By.CSS_SELECTOR, "div.feed-shared-update-v2")
-            logging.info(f"📌 Found {len(posts)} posts so far (scroll {scrolls})")
-
-            for post in posts:
-                try:
-                    content = post.text.strip()
-                    if content:
-                        posts_data.append({"Keyword": keyword, "Post": content})
-                except Exception:
-                    continue
-
-        if not posts_data:
-            logging.warning("⚠️ No relevant posts found.")
-            return None
-
-        # Save to Excel
-        df = pd.DataFrame(posts_data)
-        filename = f"linkedin_posts_{keyword}.xlsx"
-        df.to_excel(filename, index=False)
-        logging.info(f"✅ Data saved to {filename}")
-        return filename
-
-    except Exception as e:
-        logging.error(f"❌ Error in scrape_keywords: {e}")
-        raise
-    finally:
+        results = [post.text.strip() for post in posts if post.text.strip()]
         driver.quit()
+
+        if not results:
+            logging.warning(f"No relevant posts extracted for keyword: {keyword}")
+            return f"⚠️ No relevant posts extracted for '{keyword}'."
+
+        # Save results to Excel
+        filename = f"results_{keyword}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        filepath = os.path.join(os.path.dirname(__file__), filename)
+        pd.DataFrame({"Posts": results}).to_excel(filepath, index=False)
+        logging.info(f"Scraping completed. Saved to {filename}")
+
+        return f"✅ Scraping completed for '{keyword}'. File saved: {filename}"
+
+    except WebDriverException as e:
+        logging.error(f"Selenium error: {e}")
+        return f"❌ Selenium error: {str(e)}"
+
+    except Exception as e:
+        logging.error(f"Error in scrape_keywords: {e}")
+        return f"❌ Error: {str(e)}"
